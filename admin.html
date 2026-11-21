@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Panel Organizador | Maratón Trujillo 2027</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<nav class="nav"><div class="container">
+  <a href="index.html" class="logo">DataRix <span>|</span> Admin</a>
+  <button class="btn btn-sm hidden" id="logout">SALIR</button>
+</div></nav>
+
+<div class="login" id="login">
+  <h1>ACCESO <span class="o">ORGANIZADOR</span></h1>
+  <div class="f"><label>USUARIO</label><input id="u" autocomplete="username"></div>
+  <div class="f"><label>CONTRASEÑA</label><input id="p" type="password" autocomplete="current-password"></div>
+  <div class="note" id="lerr" style="color:#ff6b6b;margin-bottom:10px"></div>
+  <button class="btn" id="lbtn" style="width:100%">INGRESAR</button>
+</div>
+
+<main class="admin-wrap hidden" id="dash"><div class="container">
+  <div class="kpis">
+    <div class="kpi"><small>TOTAL INSCRITOS</small><b id="k-total">0</b></div>
+    <div class="kpi"><small>RECAUDACIÓN (APROBADA)</small><b id="k-money">S/ 0.00</b></div>
+    <div class="kpi"><small>PAGOS APROBADOS</small><b id="k-ok">0</b></div>
+    <div class="kpi"><small>PAGOS PENDIENTES</small><b id="k-pen">0</b></div>
+  </div>
+  <div class="toolbar">
+    <input id="q" placeholder="Buscar por DNI, nombre o código...">
+    <button class="btn" id="csv">EXPORTAR EXCEL (CSV)</button>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>CÓDIGO</th><th>NOMBRE</th><th>DNI</th><th>DIST.</th><th>CUPOS</th><th>TOTAL</th><th>PAGO</th><th>VOUCHER</th><th>ESTADO</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+</div></main>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const API = window.API_BASE || '';
+  let token = sessionStorage.getItem('adm'), data = [];
+  const money = n => 'S/ ' + Number(n).toFixed(2);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const H = () => ({ Authorization: 'Bearer ' + token });
+
+  function show(on) {
+    $('#login').classList.toggle('hidden', on);
+    $('#dash').classList.toggle('hidden', !on);
+    $('#logout').classList.toggle('hidden', !on);
+  }
+  async function login() {
+    $('#lerr').textContent = '';
+    const r = await fetch(API + '/api/admin/login', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ username: $('#u').value, password: $('#p').value }) });
+    const j = await r.json();
+    if (!r.ok) { $('#lerr').textContent = j.error || 'Error'; return; }
+    token = j.token; sessionStorage.setItem('adm', token); load();
+  }
+  async function load() {
+    const r = await fetch(API + '/api/admin/registrations', { headers: H() });
+    if (r.status === 401) { sessionStorage.removeItem('adm'); show(false); return; }
+    const j = await r.json(); data = j.registrations; show(true);
+    $('#k-total').textContent = j.kpis.total;
+    $('#k-money').textContent = money(j.kpis.revenue);
+    $('#k-ok').textContent = j.kpis.approved;
+    $('#k-pen').textContent = j.kpis.pending;
+    render();
+  }
+  function render() {
+    const q = $('#q').value.trim().toLowerCase();
+    const list = data.filter(d => !q || [d.dni, d.nombres, d.apellidos, d.code].join(' ').toLowerCase().includes(q));
+    $('#rows').innerHTML = list.map(d => `<tr>
+      <td>${esc(d.code)}</td><td>${esc(d.nombres)} ${esc(d.apellidos)}</td><td>${esc(d.dni)}</td>
+      <td>${esc(d.distancia)}</td><td>${esc(d.cupos)}</td><td>${money(d.total)}</td><td>${esc(d.metodo_pago)}</td>
+      <td>${d.voucher_url ? `<a class="o" target="_blank" rel="noopener" href="${esc(d.voucher_url)}">Ver</a>` : '—'}</td>
+      <td><span class="badge ${d.status === 'approved' ? 'b-ok' : 'b-pen'}">${d.status === 'approved' ? 'APROBADO' : 'PENDIENTE'}</span></td>
+      <td>${d.status !== 'approved' ? `<button class="btn btn-sm" data-c="${esc(d.code)}">APROBAR</button>` : ''}</td></tr>`).join('')
+      || '<tr><td colspan="10" class="note">Sin resultados</td></tr>';
+  }
+  $('#rows').addEventListener('click', async e => {
+    const c = e.target.dataset.c; if (!c) return;
+    if (!confirm('¿Aprobar pago y enviar correo de confirmación a ' + c + '?')) return;
+    e.target.disabled = true;
+    const r = await fetch(`${API}/api/admin/registrations/${c}/approve`, { method: 'POST', headers: H() });
+    const j = await r.json(); if (!r.ok) alert(j.error || 'Error');
+    else if (!j.email_sent) alert('Aprobado, pero el correo no se envió (SMTP no configurado).');
+    load();
+  });
+  $('#csv').onclick = async () => {
+    const r = await fetch(API + '/api/admin/export.csv', { headers: H() });
+    if (!r.ok) return alert('No se pudo exportar');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
+    a.download = 'corredores_trujillo_2027.csv'; a.click();
+  };
+  $('#q').oninput = render;
+  $('#lbtn').onclick = login;
+  $('#p').addEventListener('keydown', e => e.key === 'Enter' && login());
+  $('#logout').onclick = () => { sessionStorage.removeItem('adm'); token = null; show(false); };
+  if (token) load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "TRU27-XC5VCV": {
+    "nombres": "Daniel",
+    "apellidos": "Irene",
+    "dni": "78378688",
+    "genero": "Masculino",
+    "ciudad": "Calle Los Gladiolos 137",
+    "email": "ollantay1000@gmail.com",
+    "telefono": "922972843",
+    "talla": "M",
+    "sangre": "O-",
+    "emergencia": "922972843",
+    "distancia": "10K",
+    "code": "TRU27-XC5VCV",
+    "edad": 27,
+    "cupos": 1,
+    "total": 60,
+    "metodo_pago": "niubiz",
+    "status": "pending",
+    "voucher_url": null,
+    "created_at": "2026-11-21T15:06:40.721905+00:00"
+  }
+}
