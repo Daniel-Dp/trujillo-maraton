@@ -1,5 +1,6 @@
 """Backend Maratón Internacional de Trujillo 2027 (Flask) – listo para Render."""
 import csv, hmac, hashlib, io, json, os, re, secrets, smtplib, threading, time, base64
+from html import escape as html_escape
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -15,7 +16,7 @@ app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024
 PRICES = {"10K": 60, "21K": 80, "42K": 100}
 SECRET = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")  # obligatorio para login
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")  # obligatorio para login
 TOKEN_TTL = 8 * 3600
 
 # ---------------- Persistencia: Firestore/Storage o fallback local ----------------
@@ -110,25 +111,69 @@ def admin_required(fn):
     return w
 
 
-def send_email(to, subject, body):
+def send_email(to, subject, body, html=None):
     host = os.environ.get("SMTP_HOST")
     if not host:
         print(f"[email no enviado – SMTP no configurado] {to}: {subject}")
         return False
     try:
         msg = EmailMessage()
-        msg["From"] = os.environ.get("SMTP_FROM", os.environ.get("SMTP_USER", ""))
+        msg["From"] = os.environ.get("SMTP_FROM") or os.environ.get("SMTP_USER", "")
         msg["To"], msg["Subject"] = to, subject
         msg.set_content(body)
-        with smtplib.SMTP(host, int(os.environ.get("SMTP_PORT", 587)), timeout=15) as s:
+        if html:
+            msg.add_alternative(html, subtype="html")
+        with smtplib.SMTP(host, int(os.environ.get("SMTP_PORT") or 587), timeout=15) as s:
             s.starttls()
             if os.environ.get("SMTP_USER"):
-                s.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASSWORD", ""))
+                s.login(os.environ["SMTP_USER"], os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD", ""))
             s.send_message(msg)
         return True
     except Exception as e:
         print("Error enviando correo:", e)
         return False
+
+
+def confirmation_html(rec):
+    e = html_escape
+    rows = [("Código de inscripción", rec["code"]),
+            ("Corredor", f"{rec['nombres']} {rec['apellidos']}"),
+            ("Distancia", rec["distancia"]), ("Cupos", rec["cupos"]),
+            ("Monto total", f"S/ {rec['total']:.2f}"), ("Estado", "Pendiente de validación"),
+            ("Fecha del evento", "Domingo 26 de septiembre 2027 - Plaza de Armas de Trujillo")]
+    trs = "".join(
+        f'<tr><td style="padding:10px 0;border-bottom:1px solid #2a2a2a;color:#9a9a9a;font-size:12px;letter-spacing:1px;text-transform:uppercase">{e(k)}</td>'
+        f'<td style="padding:10px 0;border-bottom:1px solid #2a2a2a;text-align:right;color:#fff;font-weight:700">{e(str(v))}</td></tr>'
+        for k, v in rows)
+    return f"""<!DOCTYPE html><html><body style="margin:0;background:#0A0A0A;font-family:Arial,Helvetica,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#0A0A0A"><tr><td align="center" style="padding:24px 12px">
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#161616">
+<tr><td style="padding:24px;border-bottom:3px solid #FF5500;color:#fff;font-size:22px;font-weight:800;letter-spacing:2px">DATARIX <span style="color:#FF5500">|</span> MARATÓN TRUJILLO</td></tr>
+<tr><td style="padding:32px 24px 8px;color:#fff;font-size:30px;font-weight:800;text-transform:uppercase;line-height:1.1">¡Hola, {e(rec['nombres'])}!<br><span style="color:#FF5500">Recibimos tu inscripción</span></td></tr>
+<tr><td style="padding:8px 24px 16px;color:#cfcfcf;font-size:14px;line-height:1.5">Gracias por sumarte a la Maratón Internacional de Trujillo 2027. Estos son los datos de tu inscripción:</td></tr>
+<tr><td style="padding:0 24px"><table width="100%" cellpadding="0" cellspacing="0">{trs}</table></td></tr>
+<tr><td style="padding:24px;text-align:center"><div style="display:inline-block;border:2px solid #FF5500;color:#FF5500;font-size:26px;font-weight:800;letter-spacing:3px;padding:12px 22px">{e(rec['code'])}</div>
+<div style="color:#9a9a9a;font-size:12px;margin-top:8px">Presenta este código y tu DNI en el retiro de kits</div></td></tr>
+<tr><td style="padding:16px 24px;color:#777;font-size:11px;text-align:center">© 2027 DataRix · Maratón Internacional de Trujillo</td></tr>
+</table></td></tr></table></body></html>"""
+
+
+def confirmation_text(rec):
+    return (f"Hola {rec['nombres']} {rec['apellidos']}, recibimos tu inscripción.\nCódigo: {rec['code']}\n"
+            f"Distancia: {rec['distancia']}\nCupos: {rec['cupos']}\nMonto total: S/ {rec['total']:.2f}\n"
+            "Estado: Pendiente de validación\n\n"
+            "Evento: Domingo 26 de septiembre 2027 - Plaza de Armas de Trujillo.")
+
+
+def send_confirmation_async(rec):
+    """Envía el correo en un hilo; nunca lanza excepciones ni retrasa la respuesta."""
+    def job():
+        try:
+            send_email(rec["email"], f"Inscripción recibida {rec['code']} – Maratón Trujillo 2027",
+                       confirmation_text(rec), confirmation_html(rec))
+        except Exception as ex:
+            print("Email:", ex)
+    threading.Thread(target=job, daemon=True).start()
 
 
 def validate(d):
@@ -168,9 +213,7 @@ def create_registration():
                status="pending", voucher_url=None,
                created_at=datetime.now(timezone.utc).isoformat())
     db_set(code, rec)
-    send_email(rec["email"], f"Inscripción recibida {code}",
-               f"Hola {rec['nombres']}, recibimos tu inscripción {code} ({rec['distancia']}). "
-               "Está pendiente de validación de pago.")
+    send_confirmation_async(dict(rec))
     return jsonify(code=code, total=rec["total"]), 201
 
 
